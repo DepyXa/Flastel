@@ -1,5 +1,4 @@
-from .func.polling import polling_func
-from .func.webhook import webhook_func
+from .func.polling import TelegramPollingBot
 from .func.methods import TelegramBot
 
-__all__ = ["polling_func", "webhook_func", "TelegramBot"]
+__all__ = ["TelegramPollingBot", "", "TelegramBot"]
