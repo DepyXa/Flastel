@@ -1,0 +1,11 @@
+[tool.poetry]
+name = "flastel"
+version = "0.0.1"
+description = "Your package description"
+authors = ["Dmitry gosdepyxa@gmail.com"]
+
+[tool.poetry.dependencies]
+python = "^3.x"
+aiohttp = "^3.x"
+asyncio = "^3.x"
+logging = "^1.x"
