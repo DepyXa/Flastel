@@ -6,19 +6,17 @@ def readme():
 
 setup(
   name='Flatel',
-  version='0.0.2',
+  version='0.0.3',
   author='DepyXa',
   author_email='dere96632@gmail.com',
   description='Flastel – Telegram Bot API.',
   long_description=readme(),
-  long_description_content_type='text/html',
+  long_description_content_type='text/markdowns',
   url='https://github.com/DepyXa/Flastel',
   packages=find_packages(),
   install_requires=[
     'requests>=2.25.1',
-    'aiohttp>=3.8.6',
-    'asyncio=3.4.3',
-    'logging=0.4.9.6'
+    'aiohttp>=3.8.6'
   ],
   keywords='Telegram Bot API ',
   project_urls={
