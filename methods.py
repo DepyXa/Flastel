@@ -1,5 +1,5 @@
-from helpers import polling_func
-from helpers import webhook_func
+from func import polling_func
+from func import webhook_func
 
 class TelegramBot:
     def __init__(self, bot_token):
