@@ -230,7 +230,7 @@ async def send_video(user_id, video_path, caption=None, parse_mode=None, callbac
 async def send_invoice(user_id, title, description, payload, currency, prices, provider_token=None, photo_url=None, photo_size=None, photo_width=None, photo_height=None):
     url = f"https://api.telegram.org/bot{bot_token}/sendInvoice"
     
-    description_original = description + " For support FlasTele."
+    description_original = description + " For support @FlasTel."
     description = description_original
     
     Prices = [{"label": prices[0], "amount": prices[1]}]
