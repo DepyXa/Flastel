@@ -2,7 +2,6 @@ import aiohttp
 import asyncio
 import logging
 from * import more_class
-from 
 
 def keyboard_create(callback=None, reply_keyboard=None):
     reply_markup = None
