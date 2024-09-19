@@ -2,7 +2,7 @@
 name = "flastel"
 version = "0.0.1"
 description = "Flastel – Telegram Bot API, create bot's"
-authors = ["Dmitry Kolodnyanskyi gosKolodnyanskyi depyxa@gmail.com"]
+authors = ["Dmitry Kolodnyanskyi dere96632@gmail.com"]
 
 [tool.poetry.dependencies]
 python = "^3.x"
