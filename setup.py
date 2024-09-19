@@ -6,7 +6,7 @@ def readme():
 
 setup(
   name='Flatel',
-  version='0.0.1',
+  version='0.0.2',
   author='DepyXa',
   author_email='dere96632@gmail.com',
   description='Flastel – Telegram Bot API.',
