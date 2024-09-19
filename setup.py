@@ -15,12 +15,10 @@ setup(
   url='https://github.com/DepyXa/Flastel',
   packages=find_packages(),
   install_requires=[
-    'requests>=2.25.1'
-  ],
-  classifiers=[
-    'Programming Language :: Python :: 3.11',
-    'License :: GNU General ::  GPL-3.0 license',
-    'Operating System :: OS Independent'
+    'requests>=2.25.1',
+    'aiohttp>=3.8.6',
+    'asyncio=3.4.3',
+    'logging=0.4.9.6'
   ],
   keywords='Telegram Bot API ',
   project_urls={
