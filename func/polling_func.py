@@ -2,6 +2,27 @@ import aiohttp
 import asyncio
 import logging
 from * import more_class
+from 
+
+def keyboard_create(callback=None, reply_keyboard=None):
+    reply_markup = None
+
+    if callback:
+        reply_markup = {"inline_keyboard": []}
+        for key, value in callback.items():
+            if value.startswith("http://") or value.startswith("https://"):
+                reply_markup["inline_keyboard"].append([{"text": key, "url": value}])
+            else:
+                reply_markup["inline_keyboard"].append([{"text": key, "callback_data": value}])
+
+    elif reply_keyboard:
+        reply_markup = {
+            "keyboard": [[{"text": button} for button in row] for row in reply_keyboard],
+            "resize_keyboard": True,  # Додаємо опцію для автоматичного підстроювання розміру
+            "one_time_keyboard": True  # Клавіатура сховається після вибору
+        }
+
+    return reply_markup
 
 class TelegramPollingBot:
     def __init__(self, bot_token):
@@ -23,12 +44,16 @@ class TelegramPollingBot:
                 return []
 
     # Метод для відправки повідомлень
-    async def send_message(self, chat_id, text):
+    async def send_message(self, chat_id, text, parse_mode=None, callback=None, reply_keyboard=None):
         url = f"{self.api_url}sendMessage"
+        reply_markup = keyboard_create(callback, reply_keyboard)
         payload = {
             "chat_id": chat_id,
             "text": text
+            "parse_mode": parse_mode
         }
+        if reply_markup:
+          payload["reply_markup"] = reply_markup
         async with aiohttp.ClientSession() as session:
             async with session.post(url, json=payload) as response:
                 if response.status == 200:
