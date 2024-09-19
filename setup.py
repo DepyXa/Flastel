@@ -19,7 +19,7 @@ setup(
   ],
   classifiers=[
     'Programming Language :: Python :: 3.11',
-    'License :: OSI Approved :: MIT License',
+    'License :: GNU General ::  GPL-3.0 license',
     'Operating System :: OS Independent'
   ],
   keywords='Telegram Bot API ',
