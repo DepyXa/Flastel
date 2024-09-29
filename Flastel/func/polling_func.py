@@ -1,3 +1,4 @@
+import time
 import aiohttp
 import asyncio
 import logging
@@ -22,6 +23,25 @@ def keyboard_create(callback=None, reply_keyboard=None):
         }
 
     return reply_markup
+
+def convert_time(self, time_str):
+        if time_str == "9999w":
+            return None
+        num, unit = int(time_str[:-1]), time_str[-1]
+        current_time = int(time.time())
+
+        if unit == 's':
+            return current_time + num
+        elif unit == 'm':
+            return current_time + num * 60
+        elif unit == 'h':
+            return current_time + num * 3600
+        elif unit == 'd':
+            return current_time + num * 86400
+        elif unit == 'w':
+            return current_time + num * 7 * 86400
+        else:
+            return None
 
 class TelegramPollingBot:
     def __init__(self, bot_token, pro_logaut=False):
@@ -215,7 +235,21 @@ class TelegramPollingBot:
             else:
                 logger.info(f"Команда {command} не знайдена в {self.commands}")
         else:
-            await self.messges[messages_txt](message)
+            if message.photo and "photo" in self.message_handlers:
+                await self.message_handlers["photo"](message)
+            elif message.video and "video" in self.message_handlers:
+                await self.message_handlers["video"](message)
+            elif message.document and "document" in self.message_handlers:
+                await self.message_handlers["document"](message)
+            elif message.audio and "audio" in self.message_handlers:
+                await self.message_handlers["audio"](message)
+            elif message.voice and "voice" in self.message_handlers:
+                await self.message_handlers["voice"](message)
+            elif text and "text" in self.message_handlers:
+                await self.message_handlers["text"](message)
+            else:
+                await self.messges[messages_txt](message)
+
 
     def messages(self, messages_txt, caps_ignore=False):
         def decorator(func):
@@ -251,6 +285,194 @@ class TelegramPollingBot:
                     self.param_commands[command] = (func, params)
             return func
         return decorator
+
+    def message_photo(self):
+        def decorator(func):
+            self.message_handlers["photo"] = func
+            logger.info("Фото хендлер зареєстровано")
+            return func
+        return decorator
+
+    def message_video(self):
+        def decorator(func):
+            self.message_handlers["video"] = func
+            logger.info("Відео хендлер зареєстровано")
+            return func
+        return decorator
+
+    def message_document(self):
+        def decorator(func):
+            self.message_handlers["document"] = func
+            logger.info("Документ хендлер зареєстровано")
+            return func
+        return decorator
+
+    def message_audio(self):
+        def decorator(func):
+            self.message_handlers["audio"] = func
+            logger.info("Аудіо хендлер зареєстровано")
+            return func
+        return decorator
+
+    def message_voice(self):
+        def decorator(func):
+            self.message_handlers["voice"] = func
+            logger.info("Голосовий хендлер зареєстровано")
+            return func
+        return decorator
+
+    async def ban_user(self, chat_id, user_id, until_time=None):
+        until_date = self.convert_time(until_time) if until_time else None
+
+        url = f"{self.api_url}banChatMember"
+        payload = {
+            "chat_id": chat_id,
+            "user_id": user_id,
+        }
+        if until_date:
+            payload["until_date"] = until_date
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload) as response:
+                if response.status == 200:
+                    logger.info(f"Користувача {user_id} було заблоковано в чаті {chat_id} до {until_date}")
+                    return True
+                else:
+                    logger.error(f"Не вдалося заблокувати користувача {user_id} в чаті {chat_id}: {response.status}")
+                    return False
+
+
+    async def unban_user(self, chat_id, user_id):
+        url = f"{self.api_url}unbanChatMember"
+        payload = {
+            "chat_id": chat_id,
+            "user_id": user_id,
+        }
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload) as response:
+                if response.status == 200:
+                    logger.info(f"Користувача {user_id} було розблоковано в чаті {chat_id}")
+                    return True
+                else:
+                    logger.error(f"Не вдалося розблокувати користувача {user_id} в чаті {chat_id}: {response.status}")
+                    return False
+
+    # Метод для надання або обмеження всіх прав на певний час
+    async def set_permissions(self, chat_id, user_id, 
+                              can_send_messages=True, 
+                              can_send_media_messages=True, 
+                              can_send_polls=True, 
+                              can_change_info=True, 
+                              can_invite_users=True, 
+                              can_pin_messages=True, 
+                              can_manage_chat=False, 
+                              can_delete_messages=False, 
+                              can_manage_video_chats=False, 
+                              can_restrict_members=False, 
+                              can_promote_members=False, 
+                              until_time=None):
+        
+        until_date = self.convert_time(until_time) if until_time else None
+        
+        url = f"{self.api_url}restrictChatMember"
+        permissions = {
+            "can_send_messages": can_send_messages,
+            "can_send_media_messages": can_send_media_messages,
+            "can_send_polls": can_send_polls,
+            "can_change_info": can_change_info,
+            "can_invite_users": can_invite_users,
+            "can_pin_messages": can_pin_messages,
+            "can_manage_chat": can_manage_chat, 
+            "can_delete_messages": can_delete_messages, 
+            "can_manage_video_chats": can_manage_video_chats, 
+            "can_restrict_members": can_restrict_members, 
+            "can_promote_members": can_promote_members,
+        }
+
+        payload = {
+            "chat_id": chat_id,
+            "user_id": user_id,
+            "permissions": permissions,
+        }
+        if until_date:
+            payload["until_date"] = until_date
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload) as response:
+                if response.status == 200:
+                    logger.info(f"Налаштовано права для користувача {user_id} в чаті {chat_id}")
+                    return True
+                else:
+                    logger.error(f"Не вдалося налаштувати права для користувача {user_id} в чаті {chat_id}: {response.status}")
+                    return False
+
+    async def apply_temporary_restrictions(self, chat_id, user_id, 
+                                            can_send_messages=False, 
+                                            can_send_media_messages=False, 
+                                            until_time=None):
+        until_date = self.convert_time(until_time) if until_time else None
+
+        url = f"{self.api_url}restrictChatMember"
+        permissions = {
+            "can_send_messages": can_send_messages,
+            "can_send_media_messages": can_send_media_messages,
+        }
+
+        payload = {
+            "chat_id": chat_id,
+            "user_id": user_id,
+            "permissions": permissions,
+        }
+        if until_date:
+            payload["until_date"] = until_date  # Додаємо дату, до якої діють обмеження
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload) as response:
+                if response.status == 200:
+                    logger.info(f"Тимчасові обмеження накладено на користувача {user_id} в чаті {chat_id} до {until_date}")
+                    return True
+                else:
+                    logger.error(f"Не вдалося накласти обмеження на користувача {user_id} в чаті {chat_id}: {response.status}")
+                    return False
+
+    async def set_permissions(self, chat_id, user_id,
+                                    can_manage_chat=True,
+                                    can_delete_messages=True,
+                                    can_manage_video_chats=True,
+                                    can_restrict_members=True,
+                                    can_promote_members=True,
+                                    can_change_info=True,
+                                    can_invite_users=True,
+                                    can_pin_messages=True,
+                                    until_time=None):
+        until_date = self.convert_time(until_time) if until_time else None
+
+        url = f"{self.api_url}promoteChatMember"
+        payload = {
+            "chat_id": chat_id,
+            "user_id": user_id,
+            "can_manage_chat": can_manage_chat,
+            "can_delete_messages": can_delete_messages,
+            "can_manage_video_chats": can_manage_video_chats,
+            "can_restrict_members": can_restrict_members,
+            "can_promote_members": can_promote_members,
+            "can_change_info": can_change_info,
+            "can_invite_users": can_invite_users,
+            "can_pin_messages": can_pin_messages,
+        }
+        if until_date:
+            payload["until_date"] = until_date
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload) as response:
+                if response.status == 200:
+                    logger.info(f"Користувач {user_id} отримав права адміністратора в чаті {chat_id} до {until_date}")
+                    return True
+                else:
+                    logger.error(f"Не вдалося призначити адміністратора {user_id} в чаті {chat_id}: {response.status}")
+                    return False
+
 class TelegramMessage:
     def __init__(self, message_data):
         self.chat_id = message_data["chat"]["id"]
@@ -259,6 +481,26 @@ class TelegramMessage:
         self.photo = message_data.get("photo", [])
         self.sticker = message_data.get("sticker", None)
         self.message_id = message_data.get("message_id", None)
+        
+        # Ініціалізація медіафайлів
+        self.photo = None
+        self.video = None
+        self.document = None
+        self.audio = None
+        self.voice = None
+
+        # Перевірка наявності медіафайлів та створення відповідних об'єктів
+        if "photo" in message_data:
+            self.photo = TelegramPhoto(message_data["photo"])
+        if "video" in message_data:
+            self.video = TelegramVideo(message_data["video"])
+        if "document" in message_data:
+            self.document = TelegramDocument(message_data["document"])
+        if "audio" in message_data:
+            self.audio = TelegramAudio(message_data["audio"])
+        if "voice" in message_data:
+            self.voice = TelegramVoice(message_data["voice"])
+
 
 class TelegramUser:
     def __init__(self, user_data):
