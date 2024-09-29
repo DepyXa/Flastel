@@ -67,7 +67,9 @@ async def handle_xtr_payment(query_data):
 async def handle_successful_xtr_payment(payment_data):
     logger.info(f"Успішна оплата: {payment_data.total_amount} {payment_data.currency}")
     chat_id = payment_data.chat_id
-    await bot.send_message(chat_id, f"Дякую за кружечку кави, тепер на у мене на одну кружку більше! （っ＾▿＾）\nᕙ(^▿^-ᕙ) {payment_data.total_amount}{payment_data.currency}")
+    await bot.send_message(chat_id,
+                f"""Дякую за кружечку кави, тепер на у мене на одну кружку більше!
+              （っ＾▿＾）\nᕙ(^▿^-ᕙ) {payment_data.total_amount}{payment_data.currency}""")
 
 if __name__ == "__main__":
     asyncio.run(bot.run_polling())
