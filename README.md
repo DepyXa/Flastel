@@ -78,7 +78,8 @@ if __name__ == "__main__":
 
 ## 🔗 Links
 [Telegram Chat](https://t.me/Flastele)     
-[PyPI](https://pypi.org/project/Flastel/)   
+[PyPI](https://pypi.org/project/Flastel/)  
+[Wiki](https://github.com/DepyXa/Flastel/wiki)
 
 
 ## Support
