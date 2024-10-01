@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "flastel"
-version = "0.0.14"
+version = "0.0.14.b3"
 description = "Flastel – Telegram Bot API, create bot's"
 authors = ["Dmitry Kolodnyanskyi dere96632@gmail.com"]
 
