@@ -1,6 +1,9 @@
-import time
+import json
+import os
+import psutil
 import aiohttp
 import asyncio
+import random
 import logging
 from typing import List, Callable
 
@@ -45,8 +48,10 @@ def convert_time(self, time_str):
             return None
 
 class TelegramPollingBot:
-    def __init__(self, bot_token, pro_logaut=False):
+    def __init__(self, bot_token, refusal_disconnect=False, in_old=True, ram_control=False):
         self.bot_token = bot_token
+        self.refusal_disconnect = refusal_disconnect
+        self.in_old = in_old
         self.api_url = f"https://api.telegram.org/bot{self.bot_token}/"
         self.message_handlers = {}
         self.commands = {}
@@ -55,8 +60,20 @@ class TelegramPollingBot:
         self.successful_payment_handlers = {}
         self.timers = []
         self.logic_handlers = []
-        self.pro_logaut = pro_logaut
-        
+        self.callback_handler = []
+        self.last_update_id = self.load_last_update_id()
+        self.ram_control = ram_control
+
+    def load_last_update_id(self):
+        if os.path.exists('last_update_id.json'):
+            with open('last_update_id.json', 'r') as f:
+                return json.load(f).get('last_update_id', 0)
+            return 0
+
+    def save_last_update_id(self, update_id):
+        with open('last_update_id.json', 'w') as f:
+            json.dump({'last_update_id': update_id}, f)
+
     async def get_updates(self, offset=None):
         url = f"{self.api_url}getUpdates"
         params = {"offset": offset, "timeout": 60}
@@ -72,7 +89,9 @@ class TelegramPollingBot:
                         await self.handle_server_error(response.status)
             except aiohttp.ClientError as e:
                 logger.error(f"Ошибка соединения: {str(e)}")
-                await self.wait_for_reconnect()
+                if self.refusal_disconnect:
+                    logger.warning("Повторно подключаемся к серверу.")
+                    await self.handle_server_error()
 
             return []
 
@@ -84,6 +103,185 @@ class TelegramPollingBot:
     async def handle_server_error(self, status_code):
         logger.error(f"Обработка ошибки сервера: {status_code}")
         await self.wait_for_reconnect()
+
+    async def display_memory_usage(self):
+        while self.running:
+            process = psutil.Process(os.getpid())
+            memory_info = process.memory_info().rss / 1024 ** 2
+            module_size = self.get_module_size()
+
+            if memory_info > 1024:
+                memory_info_str = f"{memory_info / 1024:.2f} GB"
+            else:
+                memory_info_str = f"{memory_info:.2f} MB"
+
+            sys.stdout.write(f"\rMemory usage: {memory_info_str} | Module size: {module_size:.2f} MB")
+            sys.stdout.flush()
+            
+            await asyncio.sleep(20)
+
+    def get_module_size(self):
+        module_path = os.path.dirname(__file__)
+        total_size = 0
+        for dirpath, dirnames, filenames in os.walk(module_path):
+            for f in filenames:
+                fp = os.path.join(dirpath, f)
+                total_size += os.path.getsize(fp)
+        return total_size / 1024 ** 2
+
+    async def run_polling(self):
+        if self.ram_control:
+            asyncio.create_task(self.display_memory_usage())
+        offset = self.last_update_id + 1 if self.last_update_id is not None else 0
+        while True:
+            try:
+                await asyncio.gather(
+                    self.check_timers(),
+                    self.check_logic_handlers()
+                )
+                updates = await self.get_updates(offset)
+                for update in updates:
+                    offset = update["update_id"] + 1
+                    self.save_last_update_id(offset)
+                    message_data = update.get("message")
+                    pre_checkout_query = update.get("pre_checkout_query")
+
+                    if message_data:
+                        successful_payment = update.get("message", {}).get("successful_payment")
+                        if successful_payment:
+                            payment_data = TelegramSuccessfulPayment(successful_payment)
+                            handler = self.successful_payment_handlers.get((payment_data.currency, payment_data.total_amount))
+                            if handler:
+                                await handler(payment_data)
+                            if self.pro_logaut:
+                                logger.info(f"Успішний платіж: {payment_data.total_amount} {payment_data.currency}")
+                        else:
+                            message = TelegramMessage(message_data)
+                            await self.process_message(message)
+                            if self.pro_logaut:
+                                logger.info(f"Получено сообщение: {message.text} от {message.from_user.all_name}")
+
+                    if pre_checkout_query:
+                        query_data = TelegramPAY(pre_checkout_query)
+                        handler = self.payment_handlers.get((query_data.currency, query_data.total_amount))
+                        if handler:
+                            await handler(query_data)
+                        if self.pro_logaut:
+                            logger.info(f"Перевіряємо оплату.")
+                    if "callback_query" in update:
+                        await self.handle_callback_query(update)
+
+            except Exception as e:
+                logger.error(f"Помилка під час обробки оновлень: {e}")
+                await self.wait_for_reconnect()
+            await asyncio.sleep(1)
+
+    async def process_message(self, message):
+        text = message.text
+        logger.info(f"Обробляється повідомлення: {text or 'не текстове повідомлення'}")
+
+        if not self.in_old and self.last_update_id is not None and message.update_id <= self.last_update_id:
+            logger.info("Ігноруємо старе повідомлення.")
+            return
+        
+        self.last_update_id = message.update_id
+
+        if text and text.startswith("/"):
+            parts = text.split()
+            command = parts[0].lower()
+            params = parts[1:] if len(parts) > 1 else []
+
+            if command in self.param_commands:
+                handler, allowed_params = self.param_commands[command]
+                if params and any(param in allowed_params for param in params):
+                    logger.info(f"Знайдено команду з параметрами: {params}")
+                    await handler(message, params)
+                    return
+
+            if command in self.commands:
+                logger.info(f"Знайдено команду без параметрів: {command}")
+                await self.commands[command](message)
+            else:
+                logger.info(f"Команда {command} не знайдена в {self.commands}")
+    
+        else:
+            if message.photo and "photo" in self.message_handlers:
+                logger.info("Обробляється фото")
+                await self.message_handlers["photo"](message)
+            elif message.video and "video" in self.message_handlers:
+                logger.info("Обробляється відео")
+                await self.message_handlers["video"](message)
+            elif message.document and "document" in self.message_handlers:
+                logger.info("Обробляється документ")
+                await self.message_handlers["document"](message)
+            elif message.audio and "audio" in self.message_handlers:
+                logger.info("Обробляється аудіо")
+                await self.message_handlers["audio"](message)
+            elif message.voice and "voice" in self.message_handlers:
+                logger.info("Обробляється голосове повідомлення")
+                await self.message_handlers["voice"](message)
+            elif message.contact and "contact" in self.message_handlers:
+                logger.info("Обробляється контакт")
+                await self.message_handlers["contact"](message)
+            elif message.sticker and "sticker" in self.message_handlers:
+                logger.info("Обробляється стікер")
+                await self.message_handlers["sticker"](message)
+            elif message.location and "location" in self.message_handlers:
+                logger.info("Обробляється місцезнаходження")
+                await self.message_handlers["location"](message)
+            elif message.venue and "venue" in self.message_handlers:
+                logger.info("Обробляється місце")
+                await self.message_handlers["venue"](message)
+            elif message.poll and "poll" in self.message_handlers:
+                logger.info("Обробляється опитування")
+                await self.message_handlers["poll"](message)
+            elif message.dice and "dice" in self.message_handlers:
+                logger.info("Обробляється кубик")
+                await self.message_handlers["dice"](message)
+            elif message.web_app_data and "web_app_data" in self.message_handlers:
+                logger.info("Обробляються дані веб-додатка")
+                await self.message_handlers["web_app_data"](message)
+            elif message.game and "game" in self.message_handlers:
+                logger.info("Обробляється гра")
+                await self.message_handlers["game"](message)
+            elif text and "text" in self.message_handlers:
+                logger.info("Обробляється текст")
+                await self.message_handlers["text"](message)
+            else:
+                logger.warning("Тип повідомлення не підтримується, обробка невідома.")
+                if "unknown" in self.message_handlers:
+                    await self.message_handlers["unknown"](message)
+
+    async def handle_callback_query(self, update):
+        callback_query = TelegramCallbackQuery(update["callback_query"])
+        for handler, allowed_data in self.callback_handlers:
+            if allowed_data is None or callback_query.data in allowed_data:
+                await handler(callback_query)
+
+    def pay_pre(self, currency, prices):
+        def decorator(func):
+            for price in prices:
+                self.payment_handlers[(currency, price)] = func
+            return func
+        return decorator
+
+    async def ok_pay(self, query_data):
+        url = f"{self.api_url}answerPreCheckoutQuery"
+        payload = {"pre_checkout_query_id": query_data.id, "ok": True}
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    logger.info(f"Платіж підтверджено: {data}")
+                else:
+                    logger.error(f"Error: Received status code {response.status}")
+
+    def successful_payment(self, currency, prices):
+        def decorator(func):
+            for price in prices:
+                self.successful_payment_handlers[(currency, price)] = func
+            return func
+        return decorator
 
     async def send_message(self, chat_id, text, parse_mode=None, callback=None, reply_keyboard=None):
         url = f"{self.api_url}sendMessage"
@@ -181,142 +379,6 @@ class TelegramPollingBot:
                     await asyncio.sleep(range_seconds)
                 else:
                     await asyncio.sleep(audit_seconds)
-
-    async def run_polling(self):
-        offset = 0
-        while True:
-            try:
-                await asyncio.gather(
-                        self.check_timers(),
-                        self.check_logic_handlers()
-                        )
-                updates = await self.get_updates(offset)
-                for update in updates:
-                    offset = update["update_id"] + 1
-                    message_data = update.get("message")
-                    pre_checkout_query = update.get("pre_checkout_query")
-                
-                    if message_data:
-                        successful_payment = update.get("message", {}).get("successful_payment")
-                        if successful_payment:
-                            payment_data = TelegramSuccessfulPayment(successful_payment)
-                            handler = self.successful_payment_handlers.get((payment_data.currency, payment_data.total_amount))
-                            if handler:
-                                await handler(payment_data)
-                            if self.pro_logaut:
-                                logger.info(f"Успішний платіж: {payment_data.total_amount} {payment_data.currency}")
-                        else:
-                            message = TelegramMessage(message_data)
-                            await self.process_message(message)
-                            if self.pro_logaut:
-                                logger.info(f"Получено сообщение: {message.text} от {message.from_user.all_name}")
-                
-                    if pre_checkout_query:
-                        query_data = TelegramPAY(pre_checkout_query)
-                        handler = self.payment_handlers.get((query_data.currency, query_data.total_amount))
-                        if handler:
-                            await handler(query_data)
-                        if self.pro_logaut:
-                            logger.info(f"Перевіряємо оплату.")
-
-            except Exception as e:
-                logger.error(f"Помилка під час обробки оновлень: {e}")
-                await self.wait_for_reconnect()
-            await asyncio.sleep(1)
-
-    def pay_pre(self, currency, prices):
-        def decorator(func):
-            for price in prices:
-                self.payment_handlers[(currency, price)] = func
-            return func
-        return decorator
-
-    async def ok_pay(self, query_data):
-        url = f"{self.api_url}answerPreCheckoutQuery"
-        payload = {"pre_checkout_query_id": query_data.id, "ok": True}
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    logger.info(f"Платіж підтверджено: {data}")
-                else:
-                    logger.error(f"Error: Received status code {response.status}")
-
-    def successful_payment(self, currency, prices):
-        def decorator(func):
-            for price in prices:
-                self.successful_payment_handlers[(currency, price)] = func
-            return func
-        return decorator
-
-    async def process_message(self, message):
-        text = message.text
-        logger.info(f"Обробляється повідомлення: {text or 'не текстове повідомлення'}")
-        if text and text.startswith("/"):
-            parts = text.split()
-            command = parts[0].lower()
-            params = parts[1:] if len(parts) > 1 else []
-
-            if command in self.param_commands:
-                handler, allowed_params = self.param_commands[command]
-                if params and any(param in allowed_params for param in params):
-                    logger.info(f"Знайдено команду з параметрами: {params}")
-                    await handler(message, params)
-                    return
-
-            if command in self.commands:
-                logger.info(f"Знайдено команду без параметрів: {command}")
-                await self.commands[command](message)
-            else:
-                logger.info(f"Команда {command} не знайдена в {self.commands}")
-    
-        else:
-            if message.photo and "photo" in self.message_handlers:
-                logger.info("Обробляється фото")
-                await self.message_handlers["photo"](message)
-            elif message.video and "video" in self.message_handlers:
-                logger.info("Обробляється відео")
-                await self.message_handlers["video"](message)
-            elif message.document and "document" in self.message_handlers:
-                logger.info("Обробляється документ")
-                await self.message_handlers["document"](message)
-            elif message.audio and "audio" in self.message_handlers:
-                logger.info("Обробляється аудіо")
-                await self.message_handlers["audio"](message)
-            elif message.voice and "voice" in self.message_handlers:
-                logger.info("Обробляється голосове повідомлення")
-                await self.message_handlers["voice"](message)
-            elif message.contact and "contact" in self.message_handlers:
-                logger.info("Обробляється контакт")
-                await self.message_handlers["contact"](message)
-            elif message.sticker and "sticker" in self.message_handlers:
-                logger.info("Обробляється стікер")
-                await self.message_handlers["sticker"](message)
-            elif message.location and "location" in self.message_handlers:
-                logger.info("Обробляється місцезнаходження")
-                await self.message_handlers["location"](message)
-            elif message.venue and "venue" in self.message_handlers:
-                logger.info("Обробляється місце")
-                await self.message_handlers["venue"](message)
-            elif message.poll and "poll" in self.message_handlers:
-                logger.info("Обробляється опитування")
-                await self.message_handlers["poll"](message)
-            elif message.dice and "dice" in self.message_handlers:
-                logger.info("Обробляється кубик")
-                await self.message_handlers["dice"](message)
-            elif message.web_app_data and "web_app_data" in self.message_handlers:
-                logger.info("Обробляються дані веб-додатка")
-                await self.message_handlers["web_app_data"](message)
-            elif message.game and "game" in self.message_handlers:
-                logger.info("Обробляється гра")
-                await self.message_handlers["game"](message)
-            elif text and "text" in self.message_handlers:
-                logger.info("Обробляється текст")
-                await self.message_handlers["text"](message)
-            else:
-                logger.warning("Тип повідомлення не підтримується, обробка невідома.")
-                if "unknown" in self.message_handlers:
-                    await self.message_handlers["unknown"](message)
 
     def command(self, commands, caps_ignore=True):
         def decorator(func):
@@ -451,6 +513,12 @@ class TelegramPollingBot:
             return func
         return decorator
 
+    def message_callback_query(self, callback_data=None):
+        def decorator(func):
+            self.callback_handlers.append((func, callback_data))
+            return func
+        return decorator
+
     async def ban_user(self, chat_id, user_id, until_time=None):
         until_date = self.convert_time(until_time) if until_time else None
 
@@ -488,7 +556,7 @@ class TelegramPollingBot:
                     logger.error(f"Не вдалося розблокувати користувача {user_id} в чаті {chat_id}: {response.status}")
                     return False
 
-    async def set_permissions(self, chat_id, user_id, 
+    async def user_set_permissions(self, chat_id, user_id, 
                               can_send_messages=True, 
                               can_send_media_messages=True, 
                               can_send_polls=True, 
@@ -565,7 +633,7 @@ class TelegramPollingBot:
                     logger.error(f"Не вдалося накласти обмеження на користувача {user_id} в чаті {chat_id}: {response.status}")
                     return False
 
-    async def set_permissions(self, chat_id, user_id,
+    async def admin_set_permissions(self, chat_id, user_id,
                                     can_manage_chat=True,
                                     can_delete_messages=True,
                                     can_manage_video_chats=True,
