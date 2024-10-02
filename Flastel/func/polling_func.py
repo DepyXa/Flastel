@@ -49,10 +49,8 @@ def convert_time(self, time_str):
             return None
 
 class TelegramPollingBot:
-    def __init__(self, bot_token, refusal_disconnect=False, in_old=True, ram_control=False):
+    def __init__(self, bot_token, refusal_disconnect=False, in_old=True, ram_control=False, logic_on=False, pro_logaut=False):
         self.bot_token = bot_token
-        self.refusal_disconnect = refusal_disconnect
-        self.in_old = in_old
         self.api_url = f"https://api.telegram.org/bot{self.bot_token}/"
         self.message_handlers = {}
         self.commands = {}
@@ -62,14 +60,28 @@ class TelegramPollingBot:
         self.timers = []
         self.logic_handlers = []
         self.callback_handler = []
-        self.last_update_id = self.load_last_update_id()
+        self.last_update_id = self.def_load_last_update_id()
+        self.pro_logaut = pro_logaut
         self.ram_control = ram_control
+        self.refusal_disconnect = refusal_disconnect
+        self.in_old = in_old
+        self.logic_on = logic_on
 
-    def load_last_update_id(self):
+    def def_load_last_update_id(self):
         if os.path.exists('last_update_id.json'):
             with open('last_update_id.json', 'r') as f:
                 return json.load(f).get('last_update_id', 0)
             return 0
+
+    async def get_me(self):
+        url = f"{self.api_url}getMe"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return TelegramBot(data["result"])
+                else:
+                    logger.error(f"Ошибка получения обновлений: {response.status}")
 
     def save_last_update_id(self, update_id):
         with open('last_update_id.json', 'w') as f:
@@ -99,14 +111,13 @@ class TelegramPollingBot:
     async def wait_for_reconnect(self):
         wait_time = random.choice([60, 120, 1200])
         logger.info(f"Ожидание {wait_time} секунд перед повторной попыткой...")
-        await asyncio.sleep(wait_time)
+        time.sleep(wait_time)
 
     async def handle_server_error(self, status_code):
-        logger.error(f"Обработка ошибки сервера: {status_code}")
         await self.wait_for_reconnect()
 
     async def display_memory_usage(self):
-        while self.running:
+        while self.ram_control:
             process = psutil.Process(os.getpid())
             memory_info = process.memory_info().rss / 1024 ** 2
             module_size = self.get_module_size()
@@ -116,10 +127,9 @@ class TelegramPollingBot:
             else:
                 memory_info_str = f"{memory_info:.2f} MB"
 
-            sys.stdout.write(f"\rMemory usage: {memory_info_str} | Module size: {module_size:.2f} MB")
-            sys.stdout.flush()
+            sys.stdout.write(f"\rMemory usage: {memory_info_str} | Module size: {module_size:.2f} MB\n")
             
-            await asyncio.sleep(20)
+            await asyncio.sleep(60)
 
     def get_module_size(self):
         module_path = os.path.dirname(__file__)
@@ -131,19 +141,23 @@ class TelegramPollingBot:
         return total_size / 1024 ** 2
 
     async def run_polling(self):
+        bot_info = await self.get_me()
+        print(f"Running {bot_info.first_name} in @{bot_info.username}")
+        
         if self.ram_control:
             asyncio.create_task(self.display_memory_usage())
-        offset = self.last_update_id + 1 if self.last_update_id is not None else 0
+        if self.logic_on:
+            asyncio.create_task(self.check_timers())
+            asyncio.create_task(self.check_logic_handlers())
+        if self.in_old:
+            offset = self.def_load_last_update_id()
+        else:
+            offset = 0
         while True:
             try:
-                await asyncio.gather(
-                    self.check_timers(),
-                    self.check_logic_handlers()
-                )
                 updates = await self.get_updates(offset)
                 for update in updates:
                     offset = update["update_id"] + 1
-                    self.save_last_update_id(offset)
                     message_data = update.get("message")
                     pre_checkout_query = update.get("pre_checkout_query")
 
@@ -158,35 +172,34 @@ class TelegramPollingBot:
                                 logger.info(f"Успішний платіж: {payment_data.total_amount} {payment_data.currency}")
                         else:
                             message = TelegramMessage(message_data)
-                            await self.process_message(message)
+                            await self.process_message(message, offset)
                             if self.pro_logaut:
                                 logger.info(f"Получено сообщение: {message.text} от {message.from_user.all_name}")
 
-                    if pre_checkout_query:
+                    elif pre_checkout_query:
                         query_data = TelegramPAY(pre_checkout_query)
                         handler = self.payment_handlers.get((query_data.currency, query_data.total_amount))
                         if handler:
                             await handler(query_data)
                         if self.pro_logaut:
                             logger.info(f"Перевіряємо оплату.")
-                    if "callback_query" in update:
+                    elif "callback_query" in update:
                         await self.handle_callback_query(update)
 
             except Exception as e:
                 logger.error(f"Помилка під час обробки оновлень: {e}")
                 await self.wait_for_reconnect()
-            await asyncio.sleep(1)
+        await asyncio.sleep(1)
 
-    async def process_message(self, message):
+    async def process_message(self, message, offset=0):
         text = message.text
         logger.info(f"Обробляється повідомлення: {text or 'не текстове повідомлення'}")
 
-        if not self.in_old and self.last_update_id is not None and message.update_id <= self.last_update_id:
+        if not self.in_old:
             logger.info("Ігноруємо старе повідомлення.")
             return
-        
-        self.last_update_id = message.update_id
 
+        self.save_last_update_id(offset)
         if text and text.startswith("/"):
             parts = text.split()
             command = parts[0].lower()
@@ -376,7 +389,7 @@ class TelegramPollingBot:
         while True:
             for condition, func, range_seconds, audit_seconds in self.logic_handlers:
                 if await condition():
-                    await func()  
+                    await func()
                     await asyncio.sleep(range_seconds)
                 else:
                     await asyncio.sleep(audit_seconds)
@@ -517,6 +530,13 @@ class TelegramPollingBot:
     def message_callback_query(self, callback_data=None):
         def decorator(func):
             self.callback_handlers.append((func, callback_data))
+            return func
+        return decorator
+
+    def message_auto_delete_timer_changed(self):
+        def decorator(func):
+            self.message_handlers["auto_delete_timer_changed"] = func
+            logger.info("Хендлер для зміни таймера авто-видалення зареєстровано")
             return func
         return decorator
 
@@ -670,6 +690,17 @@ class TelegramPollingBot:
                 else:
                     logger.error(f"Не вдалося призначити адміністратора {user_id} в чаті {chat_id}: {response.status}")
                     return False
+class TelegramBot:
+    def __init__(self, data):
+        self.id = data['id']
+        self.first_name = data['first_name']
+        self.username = data['username']
+        self.is_bot = data['is_bot']
+        self.can_join_groups = data['can_join_groups']
+        self.can_read_all_group_messages = data['can_read_all_group_messages']
+        self.supports_inline_queries = data['supports_inline_queries']
+        self.can_connect_to_business = data['can_connect_to_business']
+        self.has_main_web_app = data['has_main_web_app']
 
 class TelegramMessage:
     def __init__(self, message_data):
@@ -780,6 +811,10 @@ class TelegramMessage:
         # Request data
         self.request = TelegramRequest(message_data.get("request", {})) if "request" in message_data else None
 
+class MessageAutoDeleteTimerChanged:
+    def __init__(self, data):
+        self.time = data.get("time", 0)  # час у секундах
+
 class TelegramMessageOrigin:
     def __init__(self, origin_data):
         self.message_id = origin_data.get("message_id", None)
@@ -872,6 +907,31 @@ class TelegramUser:
         self.supports_inline_queries = user_data.get("supports_inline_queries", False)
 
         self.all_name = f"{self.first_name} {self.last_name}".strip()
+
+class ExternalReplyInfo:
+    def __init__(self, data):
+        self.reply_id = data.get("reply_id")
+        self.external_source = data.get("external_source")
+        self.timestamp = data.get("timestamp")
+
+class TextQuote:
+    def __init__(self, data):
+        self.quote_text = data.get("quote_text")
+        self.author = data.get("author")
+        self.timestamp = data.get("timestamp")
+
+class Story:
+    def __init__(self, data):
+        self.story_id = data.get("story_id")
+        self.author = data.get("author")
+        self.timestamp = data.get("timestamp")
+
+class LinkPreviewOptions:
+    def __init__(self, data):
+        self.preview_enabled = data.get("preview_enabled", False)
+        self.url = data.get("url")
+        self.title = data.get("title")
+        self.description = data.get("description")
 
 class TelegramVoice:
     def __init__(self, voice_data):
